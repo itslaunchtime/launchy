@@ -5,6 +5,12 @@ const keep_alive = require('./alive.js');
 const axios = require('axios');
 const ytdl = require('ytdl-core');
 
+var isPlaying = false;
+var nowPlaying;
+var vc;
+var songQueue = [];
+var conn;
+
 client.on('ready', () => {
   console.log('running /');
   /*async function getCommands(){
@@ -366,24 +372,109 @@ client.on(`message`, msg => {
       }
     }
 
-    if(msg.content.includes("launchy play ")){
+    if (msg.content.includes("launchy ")) {
       const content = msg.content;
-      const removelaunchyCall = content.replace('launchy play ','');
+      var removeLaunchyCall = content.replace('launchy ', '');
 
       if (msg.channel.type === 'dm') return;
 
       const voiceChannel = msg.member.voice.channel;
-
       if (!voiceChannel) {
         return msg.reply('please join a voice channel first!');
       }
 
-      voiceChannel.join().then(connection => {
-        const stream = ytdl(removelaunchyCall, { filter: 'audioonly' });
-        const dispatcher = connection.play(stream);
+      if (msg.content.includes("launchy play ")) {
+        removeLaunchyCall = removeLaunchyCall.replace('play ', '');
+        songQueue.push(removeLaunchyCall);
+        console.log(songQueue.join());
+        if (!isPlaying) {
+          voiceChannel.join().then(connection => {
+            vc = voiceChannel;
+            conn = connection;
+            queueHandler();
+          });
+        }
+      }
+      if (removeLaunchyCall == "np") { // Now Playing
+        nPlaying();
+      }
 
-        dispatcher.on('finish', () => voiceChannel.leave());
-      });
+      if (removeLaunchyCall == "queue") {
+        sendQueue();
+      }
+
+      if (removeLaunchyCall == "stop") {
+        vc.leave();
+        isPlaying = false;
+      }
+
+      if (removeLaunchyCall == "pause") conn.dispatcher.pause();
+
+      if (removeLaunchyCall == "resume") {
+        console.log("resume");
+        conn.dispatcher.resume();
+      }
+
+      if (removeLaunchyCall == "cq") songQueue = songQueue.splice(0, songQueue.length); // Clear queue
+
+      if (removeLaunchyCall.includes("goto ")) {
+        removeLaunchyCall = removeLaunchyCall.replace('goto ', '');
+        var skip = parseInt(removeLaunchyCall);
+        songQueue.splice(0, skip - 1);
+        queueHandler();
+      }
+
+      if (removeLaunchyCall.includes("remove ")) {
+        removeLaunchyCall = removeLaunchyCall.replace('remove ', '');
+        msg.channel.send(`Removed ${songQueue[parseInt(removeLaunchyCall) - 1]} from the queue`);
+        songQueue.splice(parseInt(removeLaunchyCall) - 1, 1);
+      } 
+    }
+  } 
+
+  async function nPlaying() {
+    let embed = new Discord.MessageEmbed();
+    embed.setColor([50, 168, 82]);
+    ytdl.getBasicInfo(nowPlaying).then(info => {
+      var tSeconds = Math.floor(info.videoDetails.lengthSeconds / 60);
+      var tMin = Math.floor(tSeconds / 60);
+      embed.addField("Now Playing", `[${info.videoDetails.title}](${nowPlaying}) at ${tMin}:${tSeconds % 60}`);
+      embed.setURL(`https://www.youtube.com/watch?v=` + info.videoDetails.videoId);
+      msg.channel.send(embed);
+    });
+  }
+
+  async function sendQueue() {
+    let embed = new Discord.MessageEmbed();
+    embed.setTitle("Queue");
+    embed.setColor([50, 168, 82]);
+    var songList = [];
+
+    ytdl.getBasicInfo(nowPlaying).then(info => {
+      embed.addField("Now Playing", `[${info.videoDetails.title}](${nowPlaying}) | ${Math.floor(info.videoDetails.lengthSeconds / 60)}:${info.videoDetails.lengthSeconds % 60}`);
+    });
+
+    for (var i = 0; i < songQueue.length; i++) {
+      let info = await ytdl.getInfo(songQueue[i]);
+      songList[i] = `${i + 1} - [${info.videoDetails.title}](${songQueue[i]}) | ${Math.floor(info.videoDetails.lengthSeconds / 60)}:${info.videoDetails.lengthSeconds % 60}`;
+    }
+    embed.addField("Up Next:", songList);
+    msg.channel.send(embed);
+  }
+
+  function queueHandler() {
+    if (songQueue.length == 0) {
+      vc.leave();
+      isPlaying = false;
+      return;
+    }
+    if (songQueue.length != 0) {
+      const stream = ytdl(songQueue[0], { filter: 'audioonly' });
+      nowPlaying = songQueue.shift();
+      const dispatcher = conn.play(stream);
+      isPlaying = true;
+
+      dispatcher.on('finish', () => queueHandler());
     }
   }
 })
