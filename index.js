@@ -5,11 +5,65 @@ const keep_alive = require('./alive.js');
 const axios = require('axios');
 const ytdl = require('ytdl-core');
 
+const prefix = "launchy "; //replace with what you want the bot prefix to be and include a space if you want it between the prefix and command
+
 var isPlaying = false;
 var nowPlaying;
 var vc;
+var queueLength = 0;
 var songQueue = [];
 var conn;
+
+class Song {
+  constructor(url, msg) {
+    this.url = url;
+    this.info;
+    this.title;
+    this.length = 0;
+    this.formattedTime;
+    this.origin = msg;
+    this.getSongInfo();
+  }
+  getSongInfo = async () => {
+    this.info = await ytdl.getInfo(this.url);
+    this.title = this.info.videoDetails.title;
+    this.length = this.info.videoDetails.lengthSeconds;
+
+    this.formattedTime = formatTime(this.length);
+    
+
+    //must have this here due to function being async, otherwise you get undefined for title
+    const embed = new Discord.MessageEmbed();
+    embed.setColor([212, 115, 210]);
+    embed.setAuthor("Added to Queue", client.user.avatarURL());
+    embed.setThumbnail(this.info.videoDetails.thumbnails[0].url);
+    embed.setTitle(this.title);
+    embed.setURL(this.url);
+    embed.addField("Channel", `[${this.info.videoDetails.author.name}](${this.info.videoDetails.author.channel_url})`, true);
+    embed.addField("Duration", this.formattedTime, true);
+    if (isPlaying) {
+      embed.addField("Est. Time Before Playing", formatTime(queueLength + (nowPlaying.length - Math.floor(conn.dispatcher.streamTime / 1000))));
+      queueLength += parseInt(this.length);
+    }
+    if (!isPlaying) {
+      embed.addField("Est. Time Before Playing", "Now");
+      isPlaying = true;
+      queueLength = 0;
+    }
+    embed.setFooter(`Requested by: ${this.origin.author.username} (${this.origin.author.tag})`, this.origin.author.avatarURL());
+    this.origin.channel.send(embed);
+  }
+}
+
+function formatTime(time) {
+  var tSeconds = time % 60;
+  var tMin = Math.floor(time / 60);
+  //console.log(time + ", " + tSeconds + ", " + tMin + ", " + queueLength);
+  if (tSeconds < 10) {
+    return `${tMin}:0${tSeconds}`;
+  }
+  return `${tMin}:${tSeconds}`;
+}
 
 client.on('ready', () => {
   console.log('running /');
@@ -371,10 +425,9 @@ client.on(`message`, msg => {
         }
       }
     }
-
-    if (msg.content.includes("launchy ")) {
+    if (msg.content.includes(prefix)) {
       const content = msg.content;
-      var removeLaunchyCall = content.replace('launchy ', '');
+      var removeCall = content.replace(prefix, '');
 
       if (msg.channel.type === 'dm') return;
 
@@ -383,10 +436,12 @@ client.on(`message`, msg => {
         return msg.reply('please join a voice channel first!');
       }
 
-      if (msg.content.includes("launchy play ")) {
-        removeLaunchyCall = removeLaunchyCall.replace('play ', '');
-        songQueue.push(removeLaunchyCall);
-        console.log(songQueue.join());
+      if (removeCall.includes("play ")) {
+        removeCall = removeCall.replace('play ', '');
+        msg.suppressEmbeds();
+        let nextSong = new Song(removeCall, msg); //initialize a song class for new entry
+        songQueue.push(nextSong); //add to queue
+
         if (!isPlaying) {
           voiceChannel.join().then(connection => {
             vc = voiceChannel;
@@ -395,70 +450,85 @@ client.on(`message`, msg => {
           });
         }
       }
-      if (removeLaunchyCall == "np") { // Now Playing
-        nPlaying();
+
+      if (removeCall == "now playing" || removeCall == "np") { // Now Playing
+        let embed = new Discord.MessageEmbed();
+        embed.setColor([212, 115, 210]).setAuthor("Now Playing", client.user.avatarURL());
+        if (isPlaying) {
+          embed.setTitle(nowPlaying.title).setURL(nowPlaying.url).setDescription(`\`${formatTime(Math.floor(conn.dispatcher.streamTime / 1000))}/${nowPlaying.formattedTime}\``);
+          embed.setThumbnail(nowPlaying.info.videoDetails.thumbnails[0].url);
+        }
+        if (!isPlaying) {
+          embed.setDescription("Nothing is currently playing on Launchy");
+        }
+        embed.setFooter(`Requested by: ${msg.author.username} (${msg.author.tag})`);
+        msg.channel.send(embed);
       }
 
-      if (removeLaunchyCall == "queue") {
-        sendQueue();
+      if (removeCall.includes("q ") || removeCall == "q") {
+        sendQueue(msg, parseInt(removeCall.replace('q ', '')));
+      }
+      if (removeCall.includes("queue ") || removeCall == "queue") {
+        sendQueue(msg, parseInt(removeCall.replace('queue ', '')));
       }
 
-      if (removeLaunchyCall == "stop") {
+      if (removeCall == "stop" || removeCall == "leave") {
         vc.leave();
         isPlaying = false;
+        songQueue = [];
+        nowPlaying = null;
+        msg.channel.send("Launchy Out!");
       }
 
-      if (removeLaunchyCall == "pause") conn.dispatcher.pause();
+      if (removeCall == "skip") {
+        queueHandler();
+        msg.channel.send("Skiping song");
+      }
 
-      if (removeLaunchyCall == "resume") {
-        console.log("resume");
+      if (removeCall == "pause") {
+        conn.dispatcher.pause();
+        msg.channel.send("Pausing");
+      }
+
+      if (removeCall == "resume") {
         conn.dispatcher.resume();
+        msg.channel.send("Resuming");
       }
 
-      if (removeLaunchyCall == "cq") songQueue = songQueue.splice(0, songQueue.length); // Clear queue
+      if (removeCall == "cq" || removeCall == "clear") {
+        songQueue = []; // Clear queue
+        msg.channel.send("Queue cleared");
+      }
 
-      if (removeLaunchyCall.includes("goto ")) {
-        removeLaunchyCall = removeLaunchyCall.replace('goto ', '');
-        var skip = parseInt(removeLaunchyCall);
+      if (removeCall.includes("goto ")) {
+        removeCall = removeCall.replace('goto ', '');
+        var skip = parseInt(removeCall);
         songQueue.splice(0, skip - 1);
         queueHandler();
       }
 
-      if (removeLaunchyCall.includes("remove ")) {
-        removeLaunchyCall = removeLaunchyCall.replace('remove ', '');
-        msg.channel.send(`Removed ${songQueue[parseInt(removeLaunchyCall) - 1]} from the queue`);
-        songQueue.splice(parseInt(removeLaunchyCall) - 1, 1);
+      if (removeCall.includes("remove ")) {
+        removeCall = removeCall.replace('remove ', '');
+        msg.channel.send(`Removed ${songQueue[parseInt(removeCall) - 1]} from the queue`);
+        songQueue.splice(parseInt(removeCall) - 1, 1);
       } 
     }
-  } 
-
-  async function nPlaying() {
-    let embed = new Discord.MessageEmbed();
-    embed.setColor([50, 168, 82]);
-    ytdl.getBasicInfo(nowPlaying).then(info => {
-      var tSeconds = Math.floor(info.videoDetails.lengthSeconds / 60);
-      var tMin = Math.floor(tSeconds / 60);
-      embed.addField("Now Playing", `[${info.videoDetails.title}](${nowPlaying}) at ${tMin}:${tSeconds % 60}`);
-      embed.setURL(`https://www.youtube.com/watch?v=` + info.videoDetails.videoId);
-      msg.channel.send(embed);
-    });
   }
 
-  async function sendQueue() {
-    let embed = new Discord.MessageEmbed();
-    embed.setTitle("Queue");
-    embed.setColor([50, 168, 82]);
+  async function sendQueue(msg, page) {
+    let embed = new Discord.MessageEmbed().setAuthor("Queue", client.user.avatarURL()).setColor([212,115,210]);
     var songList = [];
 
-    ytdl.getBasicInfo(nowPlaying).then(info => {
-      embed.addField("Now Playing", `[${info.videoDetails.title}](${nowPlaying}) | ${Math.floor(info.videoDetails.lengthSeconds / 60)}:${info.videoDetails.lengthSeconds % 60}`);
-    });
-
-    for (var i = 0; i < songQueue.length; i++) {
-      let info = await ytdl.getInfo(songQueue[i]);
-      songList[i] = `${i + 1} - [${info.videoDetails.title}](${songQueue[i]}) | ${Math.floor(info.videoDetails.lengthSeconds / 60)}:${info.videoDetails.lengthSeconds % 60}`;
+    embed.addField("Now Playing", `[${nowPlaying.title}](${nowPlaying.url}) | \`${formatTime(nowPlaying.length)} Requested by: ${nowPlaying.origin.author.username} (${nowPlaying.origin.author.tag})\` \u000A`);
+    songQueue.length <= 5 || isNaN(page) ? page = 1 : null;
+    let qLeng = (page == 1) ? songQueue.length : songQueue.length - (5 * (page-1));
+    let leng = (qLeng > 5) ? 5 : qLeng;
+    for (var i = 5 * (page - 1); i < (5 * (page - 1)) + leng; i++) {
+      songList[i] = `\`${i + 1}:\`[${songQueue[i].title}](${songQueue[i].url}) | \`${formatTime(songQueue[i].length)} Requested by: ${nowPlaying.origin.author.username} (${nowPlaying.origin.author.tag})\` \u000A`;
     }
+    songList[songList.length] = `**${songQueue.length} songs in queue | ${formatTime(queueLength)} total length**`;
     embed.addField("Up Next:", songList);
+    embed.setFooter(`Page ${page} of ${Math.ceil(songQueue.length / 5)}`, msg.author.avatarURL());
     msg.channel.send(embed);
   }
 
@@ -466,13 +536,15 @@ client.on(`message`, msg => {
     if (songQueue.length == 0) {
       vc.leave();
       isPlaying = false;
+      queueLength = 0;
+      nowPlaying = null;
       return;
     }
     if (songQueue.length != 0) {
-      const stream = ytdl(songQueue[0], { filter: 'audioonly' });
+      const stream = ytdl(songQueue[0].url, { filter: 'audioonly' });
       nowPlaying = songQueue.shift();
+      queueLength -= nowPlaying.length;
       const dispatcher = conn.play(stream);
-      isPlaying = true;
 
       dispatcher.on('finish', () => queueHandler());
     }
